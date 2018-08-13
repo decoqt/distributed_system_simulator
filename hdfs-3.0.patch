@@ -1,0 +1,240 @@
+diff --git a/main/java/org/apache/hadoop/hdfs/DFSConfigKeys.java b/main/java/org/apache/hadoop/hdfs/DFSConfigKeys.java
+index edde454..8f60af0 100644
+--- a/main/java/org/apache/hadoop/hdfs/DFSConfigKeys.java
++++ b/main/java/org/apache/hadoop/hdfs/DFSConfigKeys.java
+@@ -592,10 +592,6 @@ public class DFSConfigKeys extends CommonConfigurationKeys {
+   public static final boolean DFS_DATANODE_TRANSFERTO_ALLOWED_DEFAULT = true;
+   public static final String  DFS_HEARTBEAT_INTERVAL_KEY = "dfs.heartbeat.interval";
+   public static final long    DFS_HEARTBEAT_INTERVAL_DEFAULT = 3;
+-/*fjtaa*/
+-  public static final String  DFS_INDANGER_INTERVAL_KEY = "dfs.indanger.interval";
+-  public static final int    DFS_INDANGER_INTERVAL_DEFAULT = 60;
+-
+   public static final String  DFS_DATANODE_LIFELINE_INTERVAL_SECONDS_KEY =
+       "dfs.datanode.lifeline.interval.seconds";
+   public static final String  DFS_NAMENODE_PATH_BASED_CACHE_RETRY_INTERVAL_MS = "dfs.namenode.path.based.cache.retry.interval.ms";
+diff --git a/main/java/org/apache/hadoop/hdfs/server/blockmanagement/BlockManager.java b/main/java/org/apache/hadoop/hdfs/server/blockmanagement/BlockManager.java
+index 002061e..a2fd843 100644
+--- a/main/java/org/apache/hadoop/hdfs/server/blockmanagement/BlockManager.java
++++ b/main/java/org/apache/hadoop/hdfs/server/blockmanagement/BlockManager.java
+@@ -374,9 +374,6 @@ public class BlockManager implements BlockStatsMXBean {
+    */
+   private final short minReplicationToBeInMaintenance;
+ 
+-/*fjtaaa*/
+-//ArrayList<DatanodeDescriptor> indanger = new ArrayList<DatanodeDescriptor>();
+-
+   public BlockManager(final Namesystem namesystem, boolean haEnabled,
+       final Configuration conf) throws IOException {
+     this.namesystem = namesystem;
+@@ -3847,8 +3844,6 @@ public class BlockManager implements BlockStatsMXBean {
+             inStartupSafeMode);
+       }
+     }
+-    LOG.info("fjtbb Live is " + numberReplicas.liveReplicas());
+-    LOG.info("fjtbb Indanger is " + numberReplicas.indangerReplicas());
+     return numberReplicas;
+   }
+ 
+@@ -3858,13 +3853,6 @@ public class BlockManager implements BlockStatsMXBean {
+     final StoredReplicaState s;
+     if (storage.getState() == State.NORMAL) {
+       final DatanodeDescriptor node = storage.getDatanodeDescriptor();
+-      List<DatanodeDescriptor> indangerDN = heartbeatManager.getIndangerNodes();
+-      if( indangerDN != null && indangerDN.contains(node)) {
+-		LOG.info("fjtbb here?");
+-		s = StoredReplicaState.INDANGER;
+-      		counters.add(s, 1);
+-		return s;
+-	}
+       if (nodesCorrupt != null && nodesCorrupt.contains(node)) {
+         s = StoredReplicaState.CORRUPT;
+       } else if (inStartupSafeMode) {
+@@ -4110,19 +4098,6 @@ public class BlockManager implements BlockStatsMXBean {
+     }
+   }
+ 
+-  public void checkIndanger(BlockInfo block) {
+-      short expected = getExpectedRedundancyNum(block);
+-      final NumberReplicas n = countNodes(block);
+-      final int pending = pendingReconstruction.getNumReplicas(block);
+-      LOG.info("fjtbb expected is " + expected);
+-      LOG.info("fjtbb pending is " + pending);
+-      LOG.info("fjtbb real is  is " + n);
+-      if(expected > n.liveReplicas() + pending + 1){
+-      	neededReconstruction.add(block, n.liveReplicas() + pending,
+-            n.readOnlyReplicas(), n.outOfServiceReplicas(), expected);
+-      }
+-  }
+-
+   /**
+    * Get blocks to invalidate for <i>nodeId</i>
+    * in {@link #invalidateBlocks}.
+diff --git a/main/java/org/apache/hadoop/hdfs/server/blockmanagement/DatanodeManager.java b/main/java/org/apache/hadoop/hdfs/server/blockmanagement/DatanodeManager.java
+index 8ef4a78..cc64a04 100644
+--- a/main/java/org/apache/hadoop/hdfs/server/blockmanagement/DatanodeManager.java
++++ b/main/java/org/apache/hadoop/hdfs/server/blockmanagement/DatanodeManager.java
+@@ -75,7 +75,6 @@ public class DatanodeManager {
+   private final FSClusterStats fsClusterStats;
+ 
+   private volatile long heartbeatIntervalSeconds;
+-  private volatile int indangerIntervalSeconds;
+   private volatile int heartbeatRecheckInterval;
+   /**
+    * Stores the datanode -> block map.  
+@@ -119,10 +118,6 @@ public class DatanodeManager {
+ 
+   /** The period to wait for datanode heartbeat.*/
+   private long heartbeatExpireInterval;
+-
+-  /** fjtaa The period to wait for datanode indanger.*/
+-  private long heartbeatIndangerInterval;
+-
+   /** Ask Datanode only up to this many blocks to delete. */
+   private volatile int blockInvalidateLimit;
+ 
+@@ -248,13 +243,6 @@ public class DatanodeManager {
+         DFSConfigKeys.DFS_NAMENODE_HEARTBEAT_RECHECK_INTERVAL_DEFAULT); // 5 minutes
+     this.heartbeatExpireInterval = 2 * heartbeatRecheckInterval
+         + 10 * 1000 * heartbeatIntervalSeconds;
+-
+-    /*fjtaa*/
+-    indangerIntervalSeconds = conf.getInt(
+-        DFSConfigKeys.DFS_INDANGER_INTERVAL_KEY,
+-        DFSConfigKeys.DFS_INDANGER_INTERVAL_DEFAULT);
+-    this.heartbeatIndangerInterval = 1000*indangerIntervalSeconds;
+-
+     final int blockInvalidateLimit = Math.max(20*(int)(heartbeatIntervalSeconds),
+         DFSConfigKeys.DFS_BLOCK_INVALIDATE_LIMIT_DEFAULT);
+     this.blockInvalidateLimit = conf.getInt(
+@@ -716,12 +704,6 @@ public class DatanodeManager {
+     return (node.getLastUpdateMonotonic() <
+             (monotonicNow() - heartbeatExpireInterval));
+   }
+-	
+-  /** Is the datanode indanger? */
+-  boolean isDatanodeIndanger(DatanodeDescriptor node) {
+-    return (node.getLastUpdateMonotonic() <
+-            (monotonicNow() - heartbeatIndangerInterval));
+-  }
+ 
+   /** Add a datanode. */
+   void addDatanode(final DatanodeDescriptor node) {
+diff --git a/main/java/org/apache/hadoop/hdfs/server/blockmanagement/HeartbeatManager.java b/main/java/org/apache/hadoop/hdfs/server/blockmanagement/HeartbeatManager.java
+index 78acce5..a72ad64 100644
+--- a/main/java/org/apache/hadoop/hdfs/server/blockmanagement/HeartbeatManager.java
++++ b/main/java/org/apache/hadoop/hdfs/server/blockmanagement/HeartbeatManager.java
+@@ -22,8 +22,6 @@ import java.util.List;
+ import java.util.Map;
+ import java.util.concurrent.TimeUnit;
+ 
+-import java.util.Iterator;
+-
+ import org.apache.hadoop.conf.Configuration;
+ import org.apache.hadoop.fs.StorageType;
+ import org.apache.hadoop.hdfs.DFSConfigKeys;
+@@ -36,16 +34,6 @@ import org.apache.hadoop.util.Time;
+ import org.slf4j.Logger;
+ import org.slf4j.LoggerFactory;
+ 
+-import org.apache.hadoop.hdfs.server.blockmanagement.BlockInfoStriped.StorageAndBlockIndex;
+-import org.apache.hadoop.hdfs.server.blockmanagement.CorruptReplicasMap.Reason;
+-import org.apache.hadoop.hdfs.server.blockmanagement.DatanodeStorageInfo.AddBlockResult;
+-import org.apache.hadoop.hdfs.server.blockmanagement.NumberReplicas.StoredReplicaState;
+-import org.apache.hadoop.hdfs.server.blockmanagement.PendingDataNodeMessages.ReportedBlockInfo;
+-import org.apache.hadoop.hdfs.server.protocol.DatanodeStorage;
+-import org.apache.hadoop.hdfs.server.protocol.DatanodeStorage.State;
+-
+-
+-
+ import com.google.common.annotations.VisibleForTesting;
+ 
+ /**
+@@ -64,8 +52,6 @@ class HeartbeatManager implements DatanodeStatistics {
+    * It is synchronized by the heartbeat manager lock.
+    */
+   private final List<DatanodeDescriptor> datanodes = new ArrayList<>();
+-  /*fjtaa*/
+-  private final List<DatanodeDescriptor> indangerDN = new ArrayList<>();
+ 
+   /** Statistics, which are synchronized by the heartbeat manager lock. */
+   private final DatanodeStats stats = new DatanodeStats();
+@@ -121,10 +107,6 @@ class HeartbeatManager implements DatanodeStatistics {
+     return datanodes.size();
+   }
+ 
+-  public List<DatanodeDescriptor> getIndangerNodes(){
+-    return indangerDN;
+-  }
+-
+   @Override
+   public long getCapacityTotal() {
+     return stats.getCapacityTotal();
+@@ -387,32 +369,10 @@ class HeartbeatManager implements DatanodeStatistics {
+           if (shouldAbortHeartbeatCheck(0)) {
+             return;
+           }
+-	/*fjtaa*/
+-	  if (dead == null && dm.isDatanodeDead(d)) {
+-                stats.incrExpiredHeartbeats();
+-                dead = d;
+-                if(indangerDN.contains(d)) {
+-                        indangerDN.remove(d);
+-                }
+-	  } else if(dm.isDatanodeIndanger(d)){
+-		if(!indangerDN.contains(d)) {
+-                	indangerDN.add(d);
+-			int num = 0;
+-		 	LOG.info("fjtaa-start");
+-			BlockInfo curBlock;
+-			for(Iterator<BlockInfo> iter = d.getBlockIterator();iter.hasNext();){
+-				curBlock = iter.next();
+-				num++;
+-				blockManager.checkIndanger(curBlock);
+-			}
+-			 LOG.info("fjtaa-end total:" + num);
+-                }
+-          } else {
+-		if(indangerDN.contains(d)) {
+-                        indangerDN.remove(d);
+-                }
++          if (dead == null && dm.isDatanodeDead(d)) {
++            stats.incrExpiredHeartbeats();
++            dead = d;
+           }
+-		
+           if (d.isStale(dm.getStaleInterval())) {
+             numOfStaleNodes++;
+           }
+diff --git a/main/java/org/apache/hadoop/hdfs/server/blockmanagement/NumberReplicas.java b/main/java/org/apache/hadoop/hdfs/server/blockmanagement/NumberReplicas.java
+index 0f35327..e61df87 100644
+--- a/main/java/org/apache/hadoop/hdfs/server/blockmanagement/NumberReplicas.java
++++ b/main/java/org/apache/hadoop/hdfs/server/blockmanagement/NumberReplicas.java
+@@ -30,7 +30,6 @@ import static org.apache.hadoop.hdfs.server.blockmanagement.NumberReplicas.Store
+ import static org.apache.hadoop.hdfs.server.blockmanagement.NumberReplicas.StoredReplicaState.REDUNDANT;
+ import static org.apache.hadoop.hdfs.server.blockmanagement.NumberReplicas.StoredReplicaState.STALESTORAGE;
+ 
+-import static org.apache.hadoop.hdfs.server.blockmanagement.NumberReplicas.StoredReplicaState.INDANGER;
+ /**
+  * A immutable object that stores the number of live replicas and
+  * the number of decommissioned Replicas.
+@@ -58,8 +57,7 @@ public class NumberReplicas extends EnumCounters<NumberReplicas.StoredReplicaSta
+     STALESTORAGE,
+     // for striped blocks only. number of redundant internal block replicas
+     // that have not been tracked by blockmanager yet (i.e., not in excess)
+-    REDUNDANT,
+-    INDANGER
++    REDUNDANT
+   }
+ 
+   public NumberReplicas() {
+@@ -134,9 +132,4 @@ public class NumberReplicas extends EnumCounters<NumberReplicas.StoredReplicaSta
+   public int liveEnteringMaintenanceReplicas() {
+     return (int)get(MAINTENANCE_FOR_READ);
+   }
+-	
+-  /*fjtaa*/
+-  public int indangerReplicas() {
+-    return (int) get(INDANGER);
+-  }
+ }
